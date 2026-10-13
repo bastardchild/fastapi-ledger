@@ -118,3 +118,44 @@ def test_swagger_and_docs_are_disabled(client):
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_list_and_delete_dokumen_with_permalink_invalidation(client):
+    # 1. Insert two documents
+    p1 = sample_payload(reference_id="DOC-001")
+    p2 = sample_payload(reference_id="DOC-002")
+    r1 = client.post("/api/dokumen", json=p1)
+    r2 = client.post("/api/dokumen", json=p2)
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+
+    # 2. List documents -> should contain both
+    listing = client.get("/api/dokumen").json()
+    ref_ids = [d["reference_id"] for d in listing]
+    assert "DOC-001" in ref_ids
+    assert "DOC-002" in ref_ids
+    assert all("target_url" in d for d in listing)
+
+    # 3. Delete DOC-001
+    del_res = client.delete("/api/dokumen/DOC-001")
+    assert del_res.status_code == 200
+    assert del_res.json()["status"] == "deleted"
+
+    # 4. Listing should now ONLY contain DOC-002 (DOC-001 hidden from list view)
+    listing_after = client.get("/api/dokumen").json()
+    ref_ids_after = [d["reference_id"] for d in listing_after]
+    assert "DOC-001" not in ref_ids_after
+    assert "DOC-002" in ref_ids_after
+
+    # 5. Permalink GET /api/dokumen/DOC-001 must return 404 (invalidated)
+    get_del = client.get("/api/dokumen/DOC-001")
+    assert get_del.status_code == 404
+
+    # 6. DOC-002 remains valid
+    get_valid = client.get("/api/dokumen/DOC-002")
+    assert get_valid.status_code == 200
+
+    # 7. Audit integrity must still be True!
+    audit = client.get("/api/ledger/audit").json()
+    assert audit["integrity"] is True
+    assert audit["total_blocks"] >= 2

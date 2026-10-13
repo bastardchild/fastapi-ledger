@@ -136,7 +136,8 @@ def init_db(db_path: Optional[str] = None) -> None:
                 penandatangan   TEXT NOT NULL,
                 created_at      TEXT NOT NULL,
                 previous_hash   TEXT NOT NULL,
-                block_hash      TEXT NOT NULL
+                block_hash      TEXT NOT NULL,
+                is_deleted      INTEGER DEFAULT 0
             )
             """
         )
@@ -144,6 +145,9 @@ def init_db(db_path: Optional[str] = None) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_reference_id "
             "ON ledger (reference_id)"
         )
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(ledger)").fetchall()]
+        if "is_deleted" not in columns:
+            conn.execute("ALTER TABLE ledger ADD COLUMN is_deleted INTEGER DEFAULT 0")
         conn.commit()
 
 
@@ -266,15 +270,50 @@ def create_dokumen(data: DokumenInput) -> JSONResponse:
     )
 
 
+@app.get("/api/dokumen")
+def list_dokumen() -> JSONResponse:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ledger WHERE is_deleted = 0 ORDER BY block_index DESC"
+        ).fetchall()
+    items = []
+    for r in rows:
+        rec = _row_to_record(r)
+        rec["target_url"] = f"{VERIFY_BASE_URL}/dokumen/tampilkan/{rec['reference_id']}/"
+        items.append(rec)
+    return JSONResponse(content=items)
+
+
 @app.get("/api/dokumen/{ref_id}")
 def get_dokumen(ref_id: str) -> JSONResponse:
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM ledger WHERE reference_id = ?", (ref_id,)
         ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
+    if row is None or row["is_deleted"] == 1:
+        raise HTTPException(
+            status_code=404, detail="Dokumen tidak ditemukan atau telah dicabut"
+        )
     return JSONResponse(content=_row_to_record(row))
+
+
+@app.delete("/api/dokumen/{ref_id}")
+def delete_dokumen(ref_id: str) -> JSONResponse:
+    with _write_lock, connect() as conn:
+        row = conn.execute(
+            "SELECT is_deleted FROM ledger WHERE reference_id = ?", (ref_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
+        if row["is_deleted"] == 1:
+            return JSONResponse(
+                content={"status": "already_deleted", "reference_id": ref_id}
+            )
+        conn.execute(
+            "UPDATE ledger SET is_deleted = 1 WHERE reference_id = ?", (ref_id,)
+        )
+        conn.commit()
+    return JSONResponse(content={"status": "deleted", "reference_id": ref_id})
 
 
 @app.get("/api/ledger/audit")
