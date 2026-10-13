@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Restart the UNMER FastAPI ledger service (screen-based, no systemd).
+# Restart the UNMER FastAPI ledger service (tmux-based, no systemd).
 
 set -euo pipefail
 
@@ -18,14 +18,16 @@ as_app() {
   fi
 }
 
-echo "Stopping screen session '${SESSION}'..."
-as_app screen -S "${SESSION}" -X quit 2>/dev/null || echo "Session not running."
+echo "Stopping tmux session '${SESSION}'..."
+as_app tmux kill-session -t "${SESSION}" 2>/dev/null || echo "Session not running."
+pkill -u "${APP_USER}" -f "${APP_DIR}/venv/bin/uvicorn" 2>/dev/null || true
 sleep 1
 
 echo "Starting service (single worker)..."
 cd "${APP_DIR}"
 # NOTE: exactly one uvicorn worker (hash-chain write lock is per-process).
-as_app screen -dmS "${SESSION}" \
+# SHELL=/bin/bash is required: apache uses /sbin/nologin (verified on Rocky 9).
+as_app env SHELL=/bin/bash tmux new-session -d -s "${SESSION}" -c "${APP_DIR}" \
   "${APP_DIR}/venv/bin/uvicorn" main:app --host 127.0.0.1 --port "${PORT}" --workers 1
 sleep 2
 

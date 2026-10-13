@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Stop the UNMER FastAPI ledger service (screen-based, no systemd).
+# Stop the UNMER FastAPI ledger service (tmux-based, no systemd).
 
 set -euo pipefail
 
@@ -16,6 +16,7 @@ as_app() {
   fi
 }
 
-echo "Stopping screen session '${SESSION}'..."
-as_app screen -S "${SESSION}" -X quit 2>/dev/null || echo "Session not running."
+echo "Stopping tmux session '${SESSION}'..."
+as_app tmux kill-session -t "${SESSION}" 2>/dev/null || echo "Session not running."
+pkill -u "${APP_USER}" -f "uvicorn main:app" 2>/dev/null || true
 echo "Stopped."

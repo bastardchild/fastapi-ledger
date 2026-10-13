@@ -14,7 +14,7 @@ dari database MySQL WordPress.
 
 ```
 Pemindai QR ──HTTPS──▶ WordPress ──HTTP 127.0.0.1:8000──▶ FastAPI ──▶ ledger.db (SQLite)
-                      /dokumen/tampilkan/{id}/            (uvicorn, screen)
+                      /dokumen/tampilkan/{id}/            (uvicorn, tmux)
 ```
 
 - **WordPress plugin** — form admin, tampilan QR, halaman verifikasi publik.
@@ -30,7 +30,7 @@ fastapi-ledger/
 ├── main.py                   # Aplikasi FastAPI: schema, hashing, endpoints
 ├── pyproject.toml            # Dependensi Python (PEP 621, pinned)
 ├── ledger.db                 # SQLite (auto-created, tidak di-commit)
-├── deploy.sh                 # Runbook deployment (AlmaLinux/RHEL, screen)
+├── deploy.sh                 # Runbook deployment (AlmaLinux/Rocky/RHEL, tmux)
 ├── restart.sh                # Restart service
 ├── stop.sh                   # Stop service
 ├── tests/                    # Test suite pytest
@@ -42,9 +42,9 @@ fastapi-ledger/
 
 ## Persyaratan
 
-- Python **3.10+**
-- `python3` + `python3-pip` (AlmaLinux/RHEL: `sudo dnf install python3 python3-pip`)
-- `screen` untuk menjalankan service tanpa systemd (`sudo dnf install screen`)
+- Python **3.10+** (tersedia via `python3.12` / `python3.11` di Rocky Linux 9)
+- `python3` + `python3-pip`
+- `tmux` untuk menjalankan service tanpa systemd (`sudo dnf install tmux`)
 
 > **Aturan penting:** seluruh instalasi paket **harus** di dalam virtual environment.
 > Instalasi global (`sudo pip`) **dilarang**. `main.py` menolak berjalan di interpreter
@@ -173,7 +173,7 @@ Memvalidasi integritas seluruh rantai dari block 1: mencocokkan `previous_hash` 
 
 ## Deployment (AlmaLinux / Rocky / RHEL — tanpa systemd)
 
-Service dijalankan menggunakan **GNU screen** (detached) sebagai user `apache`.
+Service dijalankan menggunakan **tmux** (detached) sebagai user `apache`.
 Tidak ada unit systemd; auto-start saat boot memakai entri `@reboot` pada crontab user.
 
 **Lokasi di server:**
@@ -217,11 +217,11 @@ Variabel opsional:
 ### Manajemen service
 
 ```bash
-# Lihat daftar screen (pakai runuser: user apache memakai shell nologin)
-sudo runuser -u apache -- screen -ls
+# Lihat daftar tmux session (pakai runuser: user apache memakai shell nologin)
+sudo runuser -u apache -- tmux ls
 
-# Masuk ke session (lihat log; keluar dengan Ctrl+A lalu D)
-sudo runuser -u apache -- screen -r fastapi-ledger
+# Masuk ke session (lihat log; keluar/detach dengan Ctrl+B lalu D)
+sudo runuser -u apache -- tmux attach -t fastapi-ledger
 
 # Restart
 sudo bash /var/www/unmer.ac.id/fastapi-ledger/restart.sh

@@ -78,14 +78,14 @@ fi
 
 if [ "${DRY_RUN}" = "1" ]; then
   echo "DRY RUN — no changes will be made. Planned actions:"
-  echo "  - check (and only if missing, install) OS packages for: python3, screen, crontab, ss, rsync, curl, semanage, logrotate"
+  echo "  - check (and only if missing, install) OS packages for: python3, tmux, crontab, ss, rsync, curl, semanage, logrotate"
   echo "  - select the first Python >= 3.10 among python3.12, python3.11, python3"
   echo "  - back up ${APP_DIR}/ledger.db and ${PLUGIN_DST} (if they exist) under ${BACKUP_ROOT}/<timestamp>/"
   echo "  - rsync ${REPO_DIR}/fastapi-ledger/ -> ${APP_DIR}/ (extra server files are kept, ledger.db excluded)"
   echo "  - reuse the venv when healthy, else recreate it; install the app with its venv pip"
   echo "  - write .htaccess + httpd deny snippet + logrotate config only if their content changed"
   echo "  - graceful Apache reload only if the deny snippet changed"
-  echo "  - stop screen session '${SESSION}', start a new single-worker uvicorn on 127.0.0.1:${PORT}"
+  echo "  - stop tmux session '${SESSION}', start a new single-worker uvicorn on 127.0.0.1:${PORT}"
   echo "  - refresh the @reboot cron entry for ${APP_USER} (only if SETUP_CRON=1)"
   echo "  - verify the listener and the API on 127.0.0.1:${PORT}"
   exit 0
@@ -95,7 +95,7 @@ echo "== 1. Install missing OS packages only =="
 if [ "${INSTALL_OS_PACKAGES}" = "1" ]; then
   # binary -> dnf package. Each missing binary is installed on its own so a
   # single unavailable package cannot abort the whole transaction.
-  for spec in "python3:python3" "screen:screen" "crontab:cronie" "ss:iproute" "rsync:rsync" "curl:curl" "semanage:policycoreutils-python-utils" "logrotate:logrotate"; do
+  for spec in "python3:python3" "tmux:tmux" "crontab:cronie" "ss:iproute" "rsync:rsync" "curl:curl" "semanage:policycoreutils-python-utils" "logrotate:logrotate"; do
     bin="${spec%%:*}"
     pkg="${spec##*:}"
     if command -v "$bin" >/dev/null 2>&1; then
@@ -119,24 +119,27 @@ for candidate in python3.12 python3.11 python3; do
   fi
 done
 if [ -z "$PYBIN" ]; then
-  echo "  No Python >= 3.10 found; attempting to install python3.12 ..."
-  sudo dnf install -y python3.12 2>/dev/null || true
-  FALLBACK_PY="python3.12"
-  if command -v "$FALLBACK_PY" >/dev/null 2>&1 \
-    && "$FALLBACK_PY" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
-    PYBIN="$FALLBACK_PY"
-  else
-    echo "ERROR: need Python >= 3.10 (tried python3.12/3.11/3 and dnf install python3.12)" >&2
+  echo "  No Python >= 3.10 found; attempting to install python3.12 / python3.11 ..."
+  sudo dnf install -y python3.12 python3.12-pip 2>/dev/null || sudo dnf install -y python3.11 python3.11-pip 2>/dev/null || true
+  for candidate in python3.12 python3.11; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+      && "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/null; then
+      PYBIN="$candidate"
+      break
+    fi
+  done
+  if [ -z "$PYBIN" ]; then
+    echo "ERROR: need Python >= 3.10 (tried python3.12/3.11/3 and dnf install)" >&2
     exit 1
   fi
 fi
 echo "  using $PYBIN"
 
-# screen supervises the service; fail fast with a clear hint instead of an
-# obscure runuser error later.
-if ! command -v screen >/dev/null 2>&1; then
-  echo "ERROR: 'screen' is not installed and could not be installed." >&2
-  echo "On Rocky/AlmaLinux enable EPEL (dnf install epel-release) or ask to switch supervision to tmux." >&2
+# tmux supervises the service (in Rocky/AlmaLinux base repos, unlike screen);
+# fail fast with a clear hint instead of an obscure runuser error later.
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "ERROR: 'tmux' is not installed and could not be installed." >&2
+  echo "Install it manually (dnf install -y tmux) and re-run this script." >&2
   exit 1
 fi
 
@@ -217,6 +220,24 @@ else
   echo "  Apache reload not needed"
 fi
 
+echo "== 6b. SELinux (only when enforcing) =="
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+  # PHP (httpd) must be allowed to call the loopback API; without this every
+  # verification fails with a connection error on enforcing systems.
+  sudo setsebool -P httpd_can_network_connect 1 \
+    || echo "  WARNING: setsebool httpd_can_network_connect failed"
+  # ledger.db must stay writable by the service under the web root.
+  if command -v semanage >/dev/null 2>&1; then
+    sudo semanage fcontext -a -t httpd_sys_rw_content_t "${APP_DIR}(/.*)?" 2>/dev/null || true
+    sudo restorecon -R "${APP_DIR}" || echo "  WARNING: restorecon failed"
+  else
+    echo "  WARNING: semanage missing; ledger.db writes may be denied. Run:" >&2
+    echo "  semanage fcontext -a -t httpd_sys_rw_content_t '${APP_DIR}(/.*)?' && restorecon -R ${APP_DIR}" >&2
+  fi
+else
+  echo "  (skipped: SELinux not enforcing)"
+fi
+
 echo "== 7. Rotate the service log =="
 LOGROTATE_DST="/etc/logrotate.d/fastapi-ledger"
 LOGROTATE_TMP="$(mktemp)"
@@ -248,28 +269,31 @@ sudo rm -rf "${PLUGIN_DST}"
 sudo cp -r "${PLUGIN_SRC}" "${PLUGIN_DST}"
 sudo chown -R "${APP_USER}:${APP_GROUP}" "${PLUGIN_DST}"
 
-echo "== 10. Restart the service inside screen (single worker) =="
+echo "== 10. Restart the service inside tmux (single worker) =="
 cd "${APP_DIR}"
 # NOTE: exactly one uvicorn worker. The hash-chain write lock is per-process;
 # more workers would race (UNIQUE constraint becomes the only backstop).
+# SHELL=/bin/bash is required: the apache account uses /sbin/nologin and
+# tmux spawns session shells through $SHELL (verified on Rocky 9).
 # Stop the old session first so the new one can bind the port.
-as_app screen -S "${SESSION}" -X quit 2>/dev/null || echo "  (no previous session running)"
+as_app tmux kill-session -t "${SESSION}" 2>/dev/null || echo "  (no previous session running)"
+pkill -u "${APP_USER}" -f "${APP_DIR}/${VENV_DIR}/bin/uvicorn" 2>/dev/null || true
 sleep 1
-as_app screen -dmS "${SESSION}" \
+as_app env SHELL=/bin/bash tmux new-session -d -s "${SESSION}" -c "${APP_DIR}" \
   "${APP_DIR}/${VENV_DIR}/bin/uvicorn" main:app --host 127.0.0.1 --port "${PORT}" --workers 1
 
 echo "== 11. Auto-start on boot via cron =="
 if [ "${SETUP_CRON}" = "1" ]; then
-  # Adds an @reboot entry for the apache user (idempotent):
-  REBOOT_CMD="@reboot cd ${APP_DIR} && ${APP_DIR}/${VENV_DIR}/bin/uvicorn main:app --host 127.0.0.1 --port ${PORT} --workers 1 >> ${APP_DIR}/ledger.log 2>&1"
-  ( as_app crontab -l 2>/dev/null | grep -vF "${APP_DIR}/${VENV_DIR}/bin/uvicorn"; echo "${REBOOT_CMD}" ) | as_app crontab -
+  # Adds an @reboot entry for the apache user inside tmux (idempotent):
+  REBOOT_CMD="@reboot cd ${APP_DIR} && env SHELL=/bin/bash tmux new-session -d -s ${SESSION} -c ${APP_DIR} '${APP_DIR}/${VENV_DIR}/bin/uvicorn main:app --host 127.0.0.1 --port ${PORT} --workers 1 >> ${APP_DIR}/ledger.log 2>&1'"
+  ( as_app crontab -l 2>/dev/null | grep -vF "${SESSION}"; echo "${REBOOT_CMD}" ) | as_app crontab -
 else
   echo "  (skipped: SETUP_CRON=0)"
 fi
 
 echo "== 12. Verify =="
 sleep 2
-as_app screen -ls || true
+as_app tmux ls || true
 echo "--- listener must be loopback-only below (127.0.0.1, never all interfaces) ---"
 ( ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null ) | grep ":${PORT}" || true
 if curl -sf --max-time 10 "http://127.0.0.1:${PORT}/api/ledger/audit"; then
@@ -282,5 +306,5 @@ fi
 echo
 echo "Deployment complete."
 echo "The service listens ONLY on 127.0.0.1:${PORT} (not exposed to the network)."
-echo "Manage it with: runuser -u ${APP_USER} -- screen -r ${SESSION}"
+echo "Manage it with: runuser -u ${APP_USER} -- tmux attach -t ${SESSION}"
 echo "Activate the plugin in wp-admin, then set Settings > Permalinks to 'Post name'."

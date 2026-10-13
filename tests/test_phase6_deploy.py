@@ -1,4 +1,4 @@
-"""Phase 6 tests: validate the AlmaLinux/RHEL (screen-based) deployment assets."""
+"""Phase 6 tests: validate the AlmaLinux/RHEL (tmux-based) deployment assets."""
 
 import os
 import re
@@ -117,16 +117,26 @@ def test_main_refuses_system_interpreter():
     assert "UNMER_ALLOW_SYSTEM_PYTHON" in source
 
 
-def test_deploy_uses_screen_not_systemd():
+def test_deploy_uses_tmux_not_systemd():
     content = read(DEPLOY)
-    assert "screen -dmS" in content
+    assert "tmux new-session -d -s" in content
+    assert "screen" not in content, "screen is not in Rocky 9 repos; tmux is"
     assert "systemctl" not in content, "no systemd on this server"
+
+
+def test_tmux_gets_working_shell_for_nologin_user():
+    for path in (DEPLOY, RESTART):
+        content = read(path)
+        assert "SHELL=/bin/bash" in content, (
+            f"{path} must override SHELL (apache uses /sbin/nologin, "
+            "proven to kill tmux sessions on Rocky 9)"
+        )
 
 
 def test_deploy_runs_service_as_apache_user():
     content = read(DEPLOY)
     assert "runuser" in content, "apache uses /sbin/nologin; must use runuser"
-    assert 'sudo -u "${APP_USER}" screen' not in content
+    assert 'sudo -u "${APP_USER}"' not in content
 
 
 def test_deploy_checks_plugin_source_exists():
@@ -172,11 +182,17 @@ def test_deploy_installs_plugin_into_wp_root():
     assert 'rm -rf "${PLUGIN_DST}"' in content, "must clear dest or cp nests on re-deploy"
 
 
-def test_reboot_entry_uses_screen_with_absolute_paths():
+def test_reboot_entry_exists():
     content = read(DEPLOY)
-    assert "command -v screen" in content
-    assert "screen -dmS ${SESSION}" in content or "screen -dmS" in content
     assert "REBOOT_CMD" in content
+    assert "@reboot" in content
+
+
+def test_selinux_handled_when_enforcing():
+    content = read(DEPLOY)
+    assert "getenforce" in content
+    assert "httpd_can_network_connect" in content, "PHP must reach the loopback API"
+    assert "httpd_sys_rw_content_t" in content, "ledger.db must stay writable"
 
 
 def test_verify_step_fails_loudly_and_shows_listener():
@@ -202,8 +218,8 @@ def test_irreplaceable_data_backed_up_first():
 
 def test_old_session_stopped_before_start():
     content = read(DEPLOY)
-    assert 'screen -S "${SESSION}" -X quit' in content
-    assert content.index('-X quit') < content.index('screen -dmS'), "stop must precede start"
+    assert 'kill-session -t "${SESSION}"' in content
+    assert content.index('kill-session') < content.index('new-session -d'), "stop must precede start"
 
 
 def test_apache_never_hard_restarted():
@@ -235,11 +251,11 @@ def test_venv_reused_when_healthy():
     assert "reusing healthy venv" in content
 
 
-def test_stop_quits_the_screen_session():
+def test_stop_quits_the_tmux_session():
     content = read(STOP)
-    assert "screen -S" in content
-    assert "-X quit" in content
+    assert "kill-session" in content
     assert "runuser" in content
+    assert "screen" not in content
 
 
 def test_restart_starts_venv_uvicorn():
