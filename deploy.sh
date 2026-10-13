@@ -40,7 +40,7 @@ APP_DIR="${WP_ROOT}/fastapi-ledger"
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # WordPress plugins source (in the repo) and destination (on the server):
-PLUGIN_SRC="${REPO_DIR}/wp-content/plugins/unmer-ledger"
+PLUGIN_SRC="${PLUGIN_SRC:-${REPO_DIR}/wp-content/plugins/unmer-ledger}"
 PLUGIN_DST="${WP_ROOT}/wp-content/plugins/unmer-ledger"
 
 # Timestamped backups of irreplaceable data live here (outside the web root):
@@ -67,13 +67,26 @@ as_app() {
 
 echo "== 0. Verify the repository checkout =="
 if [ ! -d "${PLUGIN_SRC}" ]; then
-  echo "ERROR: plugin source not found at ${PLUGIN_SRC}" >&2
-  echo "Run this script from a repository checkout, or export REPO_DIR." >&2
-  exit 1
+  if [ -d "${PLUGIN_DST}" ]; then
+    echo "  Notice: plugin source not found at ${PLUGIN_SRC},"
+    echo "  but plugin is already installed at ${PLUGIN_DST}. Using existing plugin."
+    PLUGIN_SRC="${PLUGIN_DST}"
+  else
+    echo "ERROR: plugin source not found at ${PLUGIN_SRC}" >&2
+    echo "Run this script from a repository checkout, or export REPO_DIR / PLUGIN_SRC." >&2
+    exit 1
+  fi
 fi
-if [ ! -f "${REPO_DIR}/fastapi-ledger/main.py" ]; then
-  echo "ERROR: FastAPI source not found at ${REPO_DIR}/fastapi-ledger/main.py" >&2
-  exit 1
+
+FASTAPI_SRC="${REPO_DIR}/fastapi-ledger"
+if [ ! -f "${FASTAPI_SRC}/main.py" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "${SCRIPT_DIR}/main.py" ]; then
+    FASTAPI_SRC="${SCRIPT_DIR}"
+  else
+    echo "ERROR: FastAPI source not found at ${REPO_DIR}/fastapi-ledger/main.py" >&2
+    exit 1
+  fi
 fi
 
 if [ "${DRY_RUN}" = "1" ]; then
@@ -135,7 +148,7 @@ if [ -z "$PYBIN" ]; then
 fi
 echo "  using $PYBIN"
 
-# tmux supervises the service (in Rocky/AlmaLinux base repos, unlike screen);
+# tmux supervises the service (available in Rocky/AlmaLinux base repos);
 # fail fast with a clear hint instead of an obscure runuser error later.
 if ! command -v tmux >/dev/null 2>&1; then
   echo "ERROR: 'tmux' is not installed and could not be installed." >&2
@@ -165,10 +178,14 @@ fi
 echo "== 4. Copy the FastAPI source into place =="
 # From the repository checkout. Files are only added/updated, never deleted,
 # so extra files on the server survive. ledger.db is excluded regardless.
-sudo rsync -a --exclude '.venv' --exclude 'venv' --exclude '__pycache__' \
-  --exclude '.pytest_cache' --exclude '.htaccess' \
-  --exclude 'ledger.db' --exclude 'ledger.log' \
-  "${REPO_DIR}/fastapi-ledger/" "${APP_DIR}/"
+if [ "${FASTAPI_SRC}" != "${APP_DIR}" ]; then
+  sudo rsync -a --exclude '.venv' --exclude 'venv' --exclude '__pycache__' \
+    --exclude '.pytest_cache' --exclude '.htaccess' \
+    --exclude 'ledger.db' --exclude 'ledger.log' \
+    "${FASTAPI_SRC}/" "${APP_DIR}/"
+else
+  echo "  (FastAPI source is already at destination ${APP_DIR})"
+fi
 
 echo "== 5. Reuse or create the isolated Python virtual environment =="
 VENV_PY="${APP_DIR}/${VENV_DIR}/bin/python"
@@ -265,8 +282,13 @@ sudo chown -R "${APP_USER}:${APP_GROUP}" "${APP_DIR}"
 echo "== 9. Install the WordPress plugin =="
 # A backup was taken in step 3. Remove first: cp -r over an existing dir
 # would nest a copy inside it.
-sudo rm -rf "${PLUGIN_DST}"
-sudo cp -r "${PLUGIN_SRC}" "${PLUGIN_DST}"
+if [ "${PLUGIN_SRC}" != "${PLUGIN_DST}" ] && [ -d "${PLUGIN_SRC}" ]; then
+  sudo rm -rf "${PLUGIN_DST}"
+  sudo cp -r "${PLUGIN_SRC}" "${PLUGIN_DST}"
+  echo "  copied plugin ${PLUGIN_SRC} -> ${PLUGIN_DST}"
+else
+  echo "  (plugin already at ${PLUGIN_DST}, skipping copy)"
+fi
 sudo chown -R "${APP_USER}:${APP_GROUP}" "${PLUGIN_DST}"
 
 echo "== 10. Restart the service inside tmux (single worker) =="

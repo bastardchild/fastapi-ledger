@@ -112,3 +112,9 @@ def test_timestamp_is_server_side_utc(client):
     record = client.get("/api/dokumen/202603131").json()
     assert record["created_at"].endswith("+00:00")
     assert record["block_index"] == body["block_index"]
+
+
+def test_swagger_and_docs_are_disabled(client):
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404

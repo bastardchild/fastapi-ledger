@@ -260,7 +260,8 @@ def test_stop_quits_the_tmux_session():
 
 def test_restart_starts_venv_uvicorn():
     content = read(RESTART)
-    assert "screen -dmS" in content
+    assert "tmux new-session" in content
+    assert "screen" not in content
     assert "/venv/bin/uvicorn" in content
     assert "--host 127.0.0.1" in content
     assert "runuser" in content
