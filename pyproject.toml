@@ -1,0 +1,49 @@
+# UNMER Digital Ledger Dokumen — FastAPI microservice packaging (PEP 621).
+# Install runtime deps with:  pip install .
+# Install with test tools:    pip install ".[test]"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unmer-ledger"
+version = "1.0.0"
+description = "UNMER Digital Ledger Dokumen — FastAPI hash-chain microservice"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "annotated-doc==0.0.5",
+    "annotated-types==0.8.0",
+    "anyio==4.15.1",
+    "click==8.5.0",
+    "fastapi==0.141.1",
+    "h11==0.16.0",
+    "httptools==0.8.0",
+    "idna==3.20",
+    "pillow==12.3.0",
+    "pydantic==2.13.5",
+    "pydantic_core==2.46.5",
+    "python-dotenv==1.2.3",
+    "PyYAML==6.0.3",
+    "qrcode==8.2",
+    "starlette==1.7.0",
+    "typing-inspection==0.4.4",
+    "typing_extensions==4.16.0",
+    "uvicorn[standard]==0.53.0",
+    "watchfiles==1.3.0",
+    "websockets==17.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "httpx",
+    "pyzbar",
+]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
